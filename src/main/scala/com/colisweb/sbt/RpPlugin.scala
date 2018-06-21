@@ -1,5 +1,6 @@
 package com.colisweb.sbt
 
+import com.typesafe.sbt.packager.docker.DockerPlugin
 import com.typesafe.sbt.packager.universal.UniversalPlugin
 import sbt.Keys._
 import sbt.{AutoPlugin, _}
@@ -17,9 +18,10 @@ object RpPlugin extends AutoPlugin {
   }
 
   import UniversalPlugin.autoImport._
+  import DockerPlugin.autoImport._
   import autoImport._
 
-  override def requires = UniversalPlugin
+  override def requires = UniversalPlugin && DockerPlugin
 
   final val RpConfig = config("rp-plugin").hide
 
@@ -41,7 +43,9 @@ object RpPlugin extends AutoPlugin {
 
       Process(cmd) #> file(s"${yamlsDir.value}/${name.value}.yaml") run log
     },
-    dist := (dist dependsOn generateServiceResources).value
+    dist := (dist dependsOn generateServiceResources).value,
+    (publish in Docker) := ((publish in Docker) dependsOn generateServiceResources).value,
+    (publishLocal in Docker) := ((publishLocal in Docker) dependsOn generateServiceResources).value,
   )
 
 }
