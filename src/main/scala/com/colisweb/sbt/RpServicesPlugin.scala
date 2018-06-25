@@ -45,7 +45,7 @@ object RpPlugin extends AutoPlugin {
     lazy val tag: TaskKey[String] = taskKey[String](
       "Correspond to the 'tag' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option. Default value is: 'latest'")
     lazy val dockerImages: TaskKey[String] = taskKey[String](
-      "Correspond to the 'tag' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option. Default value is: 'latest'")
+      "Correspond to the composition of all the elements the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option.")
     lazy val servicesYamlDir: TaskKey[File]                        = taskKey[File]("TODO")
     lazy val servicesYamlFile: TaskKey[File]                       = taskKey[File]("TODO")
     lazy val generateServiceResourcesOptions: TaskKey[Seq[String]] = taskKey[Seq[String]]("TODO")
