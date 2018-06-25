@@ -128,8 +128,7 @@ object RpPlugin extends AutoPlugin {
 
           val log: Logger = streams.value.log
 
-          val yamlPath = s"${ingressesYamlDir.value}/$ingressName.yaml"
-          val yamlFile = file(yamlPath)
+          val yamlFile = file(s"${ingressesYamlDir.value}/$ingressName.yaml")
 
           toClean += yamlFile
 
