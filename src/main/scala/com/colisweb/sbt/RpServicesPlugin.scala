@@ -38,10 +38,14 @@ object IngressDeclaration {
 object RpPlugin extends AutoPlugin {
 
   object autoImport {
-    lazy val registryHost: TaskKey[String]                         = taskKey[String]("Correspond to the 'registry host' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option")
-    lazy val repo: TaskKey[String]                                 = taskKey[String]("Correspond to the 'repo' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option")
-    lazy val tag: TaskKey[String]                                  = taskKey[String]("Correspond to the 'tag' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option. Default value is: 'latest'")
-    lazy val dockerImages: TaskKey[String]                                  = taskKey[String]("Correspond to the 'tag' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option. Default value is: 'latest'")
+    lazy val registryHost: TaskKey[String] = taskKey[String](
+      "Correspond to the 'registry host' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option")
+    lazy val repo: TaskKey[String] = taskKey[String](
+      "Correspond to the 'repo' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option")
+    lazy val tag: TaskKey[String] = taskKey[String](
+      "Correspond to the 'tag' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option. Default value is: 'latest'")
+    lazy val dockerImages: TaskKey[String] = taskKey[String](
+      "Correspond to the 'tag' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option. Default value is: 'latest'")
     lazy val servicesYamlDir: TaskKey[File]                        = taskKey[File]("TODO")
     lazy val servicesYamlFile: TaskKey[File]                       = taskKey[File]("TODO")
     lazy val generateServiceResourcesOptions: TaskKey[Seq[String]] = taskKey[Seq[String]]("TODO")
@@ -58,8 +62,8 @@ object RpPlugin extends AutoPlugin {
 
   override def requires = UniversalPlugin && DockerPlugin
 
-  private val acc: mutable.Set[String] = mutable.Set.empty[String]
-  private val toClean : mutable.Set[File] = mutable.Set.empty[File]
+  private val acc: mutable.Set[String]   = mutable.Set.empty[String]
+  private val toClean: mutable.Set[File] = mutable.Set.empty[File]
 
   val RpServicesConfig = config("rp-plugin")
 
