@@ -8,6 +8,11 @@ sbtPlugin := true
 
 addSbtPlugin("com.typesafe.sbt" % "sbt-native-packager" % "1.3.4" % "provided")
 
+mappings in (Compile, packageSrc) ++= {
+  val base  = (sourceManaged  in Compile).value
+  val files = (managedSources in Compile).value
+  files.map { f => (f, f.relativeTo(base).get.getPath) }
+}
 credentials += Credentials(Path.userHome / ".bintray" / ".credentials")
 licenses := Seq("MIT" -> url("http://opensource.org/licenses/MIT"))
 homepage := Some(url("https://github.com/colisweb/sbt-rp"))
