@@ -1,51 +1,33 @@
 package com.colisweb.sbt
 
-import com.typesafe.sbt.packager.docker.DockerPlugin
+import java.io.Closeable
+import java.util.concurrent.atomic.AtomicInteger
+
+import com.typesafe.sbt.packager.docker.{DockerAlias, DockerPlugin}
 import com.typesafe.sbt.packager.universal.UniversalPlugin
 import sbt.Keys._
 import sbt.{AutoPlugin, Def, _}
+import sbt.Def.Initialize
+import sbt.Keys._
+import sbt.std.{JoinTask, TaskExtra}
 
 import scala.collection.mutable
 import scala.language.postfixOps
-import scala.sys.process.Process
+import scala.sys.process.{Process, ProcessBuilder}
 
 final case class IngressDeclaration private (
     name: String,
-    serviceNames: Seq[String],
+    services: Seq[ProjectRef],
     options: Seq[String] = Seq.empty,
     annotations: Seq[String] = Seq.empty,
     tlsSecret: Option[String] = None
 )
 
-object IngressDeclaration {
-
-  def build(
-      name: String,
-      services: Seq[Project],
-      options: Seq[String] = Seq.empty,
-      annotations: Seq[String] = Seq.empty,
-      tlsSecret: Option[String] = None
-  ): IngressDeclaration =
-    new IngressDeclaration(
-      name = name,
-      serviceNames = services.map(_.id),
-      options = options,
-      annotations = annotations,
-      tlsSecret = tlsSecret
-    )
-}
-
 object RpPlugin extends AutoPlugin {
 
   object autoImport {
-    lazy val registryHost: TaskKey[String] = taskKey[String](
-      "Correspond to the 'registry host' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option")
-    lazy val repo: TaskKey[String] = taskKey[String](
-      "Correspond to the 'repo' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option")
-    lazy val tag: TaskKey[String] = taskKey[String](
-      "Correspond to the 'tag' in the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option. Default value is: 'latest'")
-    lazy val dockerImages: TaskKey[String] = taskKey[String](
-      "Correspond to the composition of all the elements the: `docker-images - Docker images to be deployed. Format: [<registry host>/][<repo>/]image[:tag]` command option.")
+    val Kubernetes = config("kubernetes")
+
     lazy val servicesYamlDir: TaskKey[File]                        = taskKey[File]("TODO")
     lazy val servicesYamlFile: TaskKey[File]                       = taskKey[File]("TODO")
     lazy val generateServiceResourcesOptions: TaskKey[Seq[String]] = taskKey[Seq[String]]("TODO")
@@ -54,6 +36,8 @@ object RpPlugin extends AutoPlugin {
     lazy val ingressesYamlDir: TaskKey[File]             = taskKey[File]("TODO")
     lazy val ingresses: TaskKey[Seq[IngressDeclaration]] = taskKey[Seq[IngressDeclaration]]("TODO")
     lazy val generateIngressResources: TaskKey[Unit]     = taskKey[Unit]("TODO")
+
+    lazy val surchargedPublishLocal: TaskKey[Unit] = taskKey[Unit]("TODO")
   }
 
   import DockerPlugin.autoImport._
@@ -62,13 +46,25 @@ object RpPlugin extends AutoPlugin {
 
   override def requires = UniversalPlugin && DockerPlugin
 
-  private val acc: mutable.Set[String]   = mutable.Set.empty[String]
-  private val toClean: mutable.Set[File] = mutable.Set.empty[File]
+  private val acc: mutable.Set[DockerAlias] = mutable.Set.empty[DockerAlias]
+  private val toClean: mutable.Set[File]    = mutable.Set.empty[File]
+  private val serviceCount                  = new AtomicInteger(0)
 
-  val RpServicesConfig = config("rp-plugin")
+  private val taskAcc: mutable.Set[Task[Any]] = mutable.Set.empty[Task[Any]]
+
+  private def sequential(tasks: Seq[Task[Any]]): Initialize[Task[Seq[Any]]] =
+    tasks.toList match {
+      case Nil => Def.task { Nil }
+      case x :: xs =>
+        Def.taskDyn {
+          val v = x.value
+          sequential(xs).map(v +: _)
+        }
+    }
+
+  override def projectConfigurations: Seq[Configuration] = Kubernetes :: Nil
 
   override lazy val projectSettings = Seq(
-    tag := "latest",
     generateServiceResourcesOptions := Seq(
       "--generate-pod-controllers",
       "--generate-services",
@@ -77,13 +73,14 @@ object RpPlugin extends AutoPlugin {
       "--pod-controller-image-pull-policy Always"
     ),
     servicesYamlFile := file(s"${servicesYamlDir.value}/${name.value}.yaml"),
-    dockerImages := s"${registryHost.value}/${repo.value}/${name.value}:${tag.value}",
     generateServiceResources := {
-      acc += dockerImages.value
+      acc += dockerAlias.value
       toClean += servicesYamlFile.value
 
+      serviceCount.set(ingresses.value.flatMap(_.services).size)
+
       val cmd =
-        s"rp generate-kubernetes-resources ${dockerImages.value} ${generateServiceResourcesOptions.value.mkString(" ")}"
+        s"rp generate-kubernetes-resources ${dockerAlias.value.latest} ${generateServiceResourcesOptions.value.mkString(" ")}"
 
       val log: Logger = streams.value.log
 
@@ -110,33 +107,82 @@ object RpPlugin extends AutoPlugin {
     cleanFiles ++= toClean.map(_.getAbsoluteFile).toSeq
   )
 
-  override def buildSettings = Seq(
-    ingresses := Seq.empty,
-    generateIngressResources := {
-      ingresses.value.map {
-        case IngressDeclaration(ingressName, services, options, annotations, tlsSecret) if services.nonEmpty =>
-          val cmd = Seq(
-            "rp",
-            "generate-kubernetes-resources",
-            "--generate-ingress",
-            s"--ingress-name $ingressName",
-            options.mkString(" "),
-            annotations.map(a => s"--ingress-annotation $a").mkString(" "),
-            tlsSecret.fold("")(secretName => s"--ingress-tls-secret $secretName"),
-            acc.filter(repo => services.exists(repo.contains)).mkString(" ")
-          ).filter(_.nonEmpty).mkString(" ")
+  private def totoPublishLocal = Def.taskDyn {
+    val projects            = microservicesProjects.value
+    val filter              = ScopeFilter(inProjects(projects: _*))
+    val runningServiceTasks = (Docker / publishLocal).all(filter)
 
-          val log: Logger = streams.value.log
-
-          val yamlFile = file(s"${ingressesYamlDir.value}/$ingressName.yaml")
-
-          toClean += yamlFile
-
-          log.info(s"RpPlugin - Executing: $cmd > ${yamlFile.getAbsolutePath}")
-
-          Process(cmd) #> yamlFile run log
-      }
+    Def.task {
+      Def
+        .sequential(
+          runningServiceTasks,
+          generateIngressResources
+        )
+        .value
     }
-  )
+  }
+
+  /** Projects that have the Microservice plugin enabled. */
+  private lazy val microservicesProjects: Initialize[Task[Seq[ProjectRef]]] = Def.task {
+    val structure = buildStructure.value
+    val projects  = structure.allProjectRefs
+    for {
+      projRef    <- projects
+      proj       <- Project.getProject(projRef, structure).toList
+      autoPlugin <- proj.autoPlugins if autoPlugin == RpPlugin
+    } yield projRef
+  }
+
+  private def totoDockerAlias(projectRef: Seq[ProjectRef]): Initialize[Seq[DockerAlias]] =
+    dockerAlias.all(ScopeFilter(inProjects(projectRef: _*)))
+
+  private def dontAggregate(keys: Scoped*): Seq[Setting[_]] = keys.map(aggregate in _ := false)
+
+  private def ingress(ingresses: Seq[IngressDeclaration]): Def.Initialize[Task[Seq[ProcessBuilder]]] = {
+    Initialize.join {
+      ingresses.map {
+        case IngressDeclaration(ingressName, services: Seq[ProjectRef], options, annotations, tlsSecret)
+            if services.nonEmpty =>
+          Def.task {
+            val imgs = totoDockerAlias(services).value.map(_.latest)
+
+            val cmd = Seq(
+              "rp",
+              "generate-kubernetes-resources",
+              "--generate-ingress",
+              s"--ingress-name $ingressName",
+              options.mkString(" "),
+              annotations.map(a => s"--ingress-annotation $a").mkString(" "),
+              tlsSecret.fold("")(secretName => s"--ingress-tls-secret $secretName"),
+              imgs.mkString(" ")
+            ).filter(_.nonEmpty).mkString(" ")
+
+            val log: Logger = streams.value.log
+
+            val yamlFile = file(s"${ingressesYamlDir.value}/$ingressName.yaml")
+
+            toClean += yamlFile
+
+            log.info(s"RpPlugin - Executing: $cmd > ${yamlFile.getAbsolutePath}")
+
+            Process(cmd) #> yamlFile
+          }
+      }
+    }.flatMap(TaskExtra.joinTasks(_).join)
+  }
+
+  override def buildSettings =
+    Seq(
+      ingresses := Seq.empty,
+      generateIngressResources := Def.taskDyn {
+        val log: Logger = streams.value.log
+
+        val v = ingresses.value
+        Def.task {
+          ingress(v).value.map(_ run log)
+        }
+      },
+      surchargedPublishLocal := totoPublishLocal.value
+    ) ++ dontAggregate(generateIngressResources)
 
 }
