@@ -1,15 +1,13 @@
 package com.colisweb.sbt
 
-import java.io.Closeable
 import java.util.concurrent.atomic.AtomicInteger
 
 import com.typesafe.sbt.packager.docker.{DockerAlias, DockerPlugin}
 import com.typesafe.sbt.packager.universal.UniversalPlugin
-import sbt.Keys._
-import sbt.{AutoPlugin, Def, _}
 import sbt.Def.Initialize
 import sbt.Keys._
-import sbt.std.{JoinTask, TaskExtra}
+import sbt.std.TaskExtra
+import sbt.{AutoPlugin, Def, _}
 
 import scala.collection.mutable
 import scala.language.postfixOps
@@ -17,7 +15,7 @@ import scala.sys.process.{Process, ProcessBuilder}
 
 final case class IngressDeclaration private (
     name: String,
-    services: Seq[ProjectRef],
+    services: Seq[Project],
     options: Seq[String] = Seq.empty,
     annotations: Seq[String] = Seq.empty,
     tlsSecret: Option[String] = None
@@ -41,7 +39,6 @@ object RpPlugin extends AutoPlugin {
   }
 
   import DockerPlugin.autoImport._
-  import UniversalPlugin.autoImport._
   import autoImport._
 
   override def requires = UniversalPlugin && DockerPlugin
@@ -133,54 +130,60 @@ object RpPlugin extends AutoPlugin {
     } yield projRef
   }
 
-  private def totoDockerAlias(projectRef: Seq[ProjectRef]): Initialize[Seq[DockerAlias]] =
-    dockerAlias.all(ScopeFilter(inProjects(projectRef: _*)))
-
   private def dontAggregate(keys: Scoped*): Seq[Setting[_]] = keys.map(aggregate in _ := false)
 
-  private def ingress(ingresses: Seq[IngressDeclaration]): Def.Initialize[Task[Seq[ProcessBuilder]]] = {
-    Initialize.join {
-      ingresses.map {
-        case IngressDeclaration(ingressName, services: Seq[ProjectRef], options, annotations, tlsSecret)
-            if services.nonEmpty =>
-          Def.task {
-            val imgs = totoDockerAlias(services).value.map(_.latest)
+  private def generateIngressYamls(ingresses: Seq[IngressDeclaration]): Def.Initialize[Task[Seq[ProcessBuilder]]] = {
+    def findDockerAliases(projects: Seq[Project]): Def.Initialize[Seq[DockerAlias]] =
+      dockerAlias.all(ScopeFilter(inProjects(projects.map(_.project): _*)))
 
-            val cmd = Seq(
-              "rp",
-              "generate-kubernetes-resources",
-              "--generate-ingress",
-              s"--ingress-name $ingressName",
-              options.mkString(" "),
-              annotations.map(a => s"--ingress-annotation $a").mkString(" "),
-              tlsSecret.fold("")(secretName => s"--ingress-tls-secret $secretName"),
-              imgs.mkString(" ")
-            ).filter(_.nonEmpty).mkString(" ")
+    def ingressYaml(ingressDeclaration: IngressDeclaration) = Def.taskDyn {
+      val IngressDeclaration(ingressName, services, options, annotations, tlsSecret) = ingressDeclaration
 
-            val log: Logger = streams.value.log
+      Def.task {
+        val images = findDockerAliases(services).value
 
-            val yamlFile = file(s"${ingressesYamlDir.value}/$ingressName.yaml")
+        val cmd = Seq(
+          "rp",
+          "generate-kubernetes-resources",
+          "--generate-ingress",
+          s"--ingress-name $ingressName",
+          options.mkString(" "),
+          annotations.map(a => s"--ingress-annotation $a").mkString(" "),
+          tlsSecret.fold("")(secretName => s"--ingress-tls-secret $secretName"),
+          images.map(_.latest).mkString(" ")
+        ).filter(_.nonEmpty).mkString(" ")
 
-            toClean += yamlFile
+        val log: Logger = streams.value.log
 
-            log.info(s"RpPlugin - Executing: $cmd > ${yamlFile.getAbsolutePath}")
+        val yamlFile = file(s"${ingressesYamlDir.value}/$ingressName.yaml")
 
-            Process(cmd) #> yamlFile
-          }
+        toClean += yamlFile
+
+        log.info(s"RpPlugin - Executing: $cmd > ${yamlFile.getAbsolutePath}")
+
+        Process(cmd) #> yamlFile
       }
-    }.flatMap(TaskExtra.joinTasks(_).join)
+    }
+
+    Initialize
+      .join(ingresses.map {
+        case ingressDeclaration if ingressDeclaration.services.nonEmpty => ingressYaml(ingressDeclaration)
+      })
+      .flatMap(TaskExtra.joinTasks(_).join)
   }
 
   override def buildSettings =
     Seq(
       ingresses := Seq.empty,
-      generateIngressResources := Def.taskDyn {
-        val log: Logger = streams.value.log
+      generateIngressResources := {
+        Def.taskDyn {
+          val log: Logger = streams.value.log
+          val v = ingresses.value
 
-        val v = ingresses.value
-        Def.task {
-          ingress(v).value.map(_ run log)
-        }
+          Def.task {
+            generateIngressYamls(v).value.map(_ run log)
+          }
+        }.value
       },
       surchargedPublishLocal := totoPublishLocal.value
     ) ++ dontAggregate(generateIngressResources)
